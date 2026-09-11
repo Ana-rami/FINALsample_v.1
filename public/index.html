@@ -1,398 +1,1098 @@
-const express = require('express');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const crypto = require('crypto');
-const bcrypt = require('bcryptjs');
-const session = require('express-session');
-const wav = require('node-wav');
-const MusicTempo = require('music-tempo');
-const Meyda = require('meyda');
-const mm = require('music-metadata');
-const ffmpeg = require('fluent-ffmpeg');
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FINALsample_v.1</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-const USERS_FILE = 'users.json';
-
-app.use(express.json());
-app.use(session({
-  // Para uso personal en tu ordenador esto está bien.
-  // Si algún día publicas esta app en internet para que otros la usen,
-  // cambia este texto por algo único y no lo compartas con nadie.
-  secret: 'finalsample-v1-clave-local-cambiame-si-publicas',
-  resave: false,
-  saveUninitialized: false,
-  cookie: { maxAge: 1000 * 60 * 60 * 24 * 30 } // la sesión dura 30 días
-}));
-
-app.use(express.static(path.join(__dirname, 'public')));
-app.use(ensureIdentity);
-
-function loadUsers() {
-  try {
-    return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
-  } catch (e) {
-    return {};
-  }
-}
-function saveUsers(data) {
-  fs.writeFileSync(USERS_FILE, JSON.stringify(data, null, 2));
-}
-
-// Todo el mundo tiene una "identidad": si no ha iniciado sesión,
-// se le asigna un id de invitado guardado en su cookie de sesión.
-// Así puede usar la app sin cuenta, pero sus samples quedan ligados a ese navegador.
-function ensureIdentity(req, res, next) {
-  if (!req.session.userId && !req.session.guestId) {
-    req.session.guestId = 'guest_' + crypto.randomBytes(8).toString('hex');
-  }
-  next();
-}
-function effectiveId(req) {
-  return req.session.userId || req.session.guestId;
-}
-
-function userDir(userId) {
-  return path.join(__dirname, 'uploads', userId);
-}
-function metadataPath(userId) {
-  return path.join(userDir(userId), 'metadata.json');
-}
-function loadMetadata(userId) {
-  try {
-    return JSON.parse(fs.readFileSync(metadataPath(userId), 'utf8'));
-  } catch (e) {
-    return {};
-  }
-}
-function saveMetadata(userId, data) {
-  fs.writeFileSync(metadataPath(userId), JSON.stringify(data, null, 2));
-}
-
-// ---- Cuentas ----
-
-app.post('/register', async (req, res) => {
-  const email = (req.body && req.body.email || '').trim().toLowerCase();
-  const password = (req.body && req.body.password) || '';
-
-  if (!email || !password || password.length < 6) {
-    return res.status(400).json({ error: 'Email y contraseña (mínimo 6 caracteres) son obligatorios' });
+  :root {
+    --bg: #f7f2e9;
+    --surface: #fffdf9;
+    --hairline: #e6dfd0;
+    --text: #2b2620;
+    --text-soft: #8c8371;
+    --blue: #2f5f74;
+    --blue-soft: #e2ebe9;
+    --clay: #c97a52;
+    --gold: #c99a3d;
   }
 
-  const users = loadUsers();
-  if (users[email]) {
-    return res.status(400).json({ error: 'Ya existe una cuenta con ese email' });
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-font-smoothing: antialiased; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    min-height: 100vh;
   }
 
-  const passwordHash = await bcrypt.hash(password, 10);
-  const userId = crypto.randomBytes(8).toString('hex');
-  users[email] = { id: userId, passwordHash: passwordHash };
-  saveUsers(users);
+  .app { max-width: 1040px; margin: 0 auto; padding: 0 32px 80px; position: relative; z-index: 1; }
 
-  fs.mkdirSync(userDir(userId), { recursive: true });
+  .wave-margin {
+    position: fixed;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 100vh;
+    max-height: none;
+    width: 110px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 3px;
+    z-index: 0;
+  }
+  .wave-margin.left { left: 90px; }
+  .wave-margin.right { right: 90px; }
 
-  // Si venía usando la app como invitado, movemos sus samples a la cuenta nueva
-  const oldGuestId = req.session.guestId;
-  if (oldGuestId) {
-    const oldDir = userDir(oldGuestId);
-    if (fs.existsSync(oldDir)) {
-      const files = fs.readdirSync(oldDir);
-      files.forEach(function(f) {
-        fs.renameSync(path.join(oldDir, f), path.join(userDir(userId), f));
-      });
-      fs.rmdirSync(oldDir);
+  .wave-bar-wrap {
+    transition: transform 0.3s ease, filter 0.3s ease;
+  }
+  .wave-bar {
+    height: 3px;
+    width: 16px;
+    background: var(--blue);
+    opacity: 0.4;
+    border-radius: 3px;
+    animation: wave-bob 4s ease-in-out infinite;
+    transition: opacity 0.25s ease, filter 0.25s ease;
+  }
+  @keyframes wave-bob {
+    0%, 100% { transform: scaleX(0.8); }
+    50% { transform: scaleX(1.25); }
+  }
+
+  @media (max-width: 1300px) {
+    .wave-margin { display: none; }
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 36px 0 28px;
+    gap: 20px;
+  }
+
+  .brand-block { display: flex; flex-direction: column; gap: 3px; }
+  .brand { display: flex; align-items: baseline; gap: 3px; }
+  .brand-final { font-size: 15px; font-weight: 700; color: var(--text); }
+  .brand-rest { font-size: 15px; font-weight: 400; color: var(--text-soft); font-family: 'JetBrains Mono', monospace; }
+  .brand-credit {
+    font-family: 'Fraunces', serif;
+    font-style: italic;
+    font-size: 11.5px;
+    color: var(--text-soft);
+    letter-spacing: 0.01em;
+  }
+
+  nav { display: flex; gap: 32px; }
+  nav a {
+    color: var(--text-soft);
+    text-decoration: none;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  nav a.active { color: var(--text); }
+
+  .upload-zone { display: flex; align-items: center; gap: 10px; }
+  .upload-status { font-size: 12px; color: var(--text-soft); font-family: 'JetBrains Mono', monospace; }
+
+  .upload-btn {
+    background: var(--text);
+    color: var(--surface);
+    border: none;
+    padding: 10px 20px;
+    border-radius: 100px;
+    font-family: inherit;
+    font-weight: 600;
+    font-size: 13.5px;
+    cursor: pointer;
+  }
+
+  .intro {
+    padding: 12px 0 44px;
+    max-width: 620px;
+  }
+  .intro h1 {
+    font-family: 'Fraunces', serif;
+    font-size: 34px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    line-height: 1.28;
+    color: var(--text);
+  }
+  .intro h1 em {
+    font-style: italic;
+    color: var(--blue);
+  }
+  .intro p {
+    margin-top: 12px;
+    font-size: 15px;
+    color: var(--text-soft);
+    line-height: 1.55;
+    max-width: 460px;
+  }
+
+  .toolbar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 22px;
+    flex-wrap: wrap;
+  }
+
+  .search-box {
+    flex: 1;
+    min-width: 220px;
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 12px;
+    padding: 13px 16px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 14px;
+  }
+  .search-box::placeholder { color: var(--text-soft); }
+
+  .results-count {
+    color: var(--text-soft);
+    font-size: 13px;
+    margin-bottom: 16px;
+    font-weight: 500;
+  }
+
+  .grid {
+    background: var(--surface);
+    border-radius: 18px;
+    border: 1px solid var(--hairline);
+    overflow: hidden;
+    box-shadow: 0 12px 32px -18px rgba(43, 38, 32, 0.18);
+  }
+
+  .sample-row {
+    display: grid;
+    grid-template-columns: 36px 1fr 84px 55px 70px 55px 30px 30px;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 22px;
+    border-bottom: 1px solid var(--hairline);
+    cursor: grab;
+  }
+  .sample-row:active { cursor: grabbing; }
+  .sample-row:last-child { border-bottom: none; }
+
+  .play-btn {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: var(--blue-soft);
+    border: none;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .play-btn svg { width: 10px; height: 10px; fill: var(--blue); }
+
+  .sample-name-row { display: flex; align-items: center; gap: 6px; }
+  .sample-name { font-size: 14px; font-weight: 500; letter-spacing: -0.005em; }
+
+  .icon-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--text-soft);
+    font-size: 12px;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+    padding: 2px;
+  }
+  .sample-row:hover .icon-btn { opacity: 1; }
+  .icon-btn:hover { color: var(--blue); }
+
+  .sample-tags { display: flex; gap: 6px; margin-top: 5px; flex-wrap: wrap; }
+  .tag {
+    font-size: 11px;
+    font-weight: 500;
+    padding: 2px 9px;
+    border-radius: 100px;
+    background: var(--bg);
+    color: var(--text-soft);
+  }
+  .tag.type { background: var(--blue-soft); color: var(--blue); }
+  .tag.manual { background: rgba(201, 122, 82, 0.14); color: var(--clay); display: inline-flex; align-items: center; gap: 4px; }
+  .tag-remove { cursor: pointer; font-weight: 700; }
+  .tag-remove:hover { opacity: 0.6; }
+  .tag-add {
+    font-size: 10.5px;
+    background: none;
+    border: 1px dashed var(--hairline);
+    color: var(--text-soft);
+    border-radius: 100px;
+    padding: 1px 9px;
+    cursor: pointer;
+  }
+  .tag-add:hover { border-color: var(--blue); color: var(--blue); }
+
+  .waveform-mini {
+    height: 24px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .waveform-mini span {
+    width: 2.5px;
+    background: var(--blue);
+    opacity: 0.5;
+    border-radius: 2px;
+  }
+
+  .meta {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12.5px;
+    color: var(--text-soft);
+    text-align: right;
+  }
+  .meta strong { color: var(--text); font-weight: 500; }
+
+  .star-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 16px;
+    color: var(--hairline);
+    width: 28px; height: 28px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .star-btn.active { color: var(--gold); }
+
+  .delete-btn {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: transparent;
+    border: none;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    color: var(--text-soft);
+    font-size: 16px;
+    flex-shrink: 0;
+  }
+  .delete-btn:hover { color: var(--clay); background: rgba(201, 122, 82, 0.1); }
+
+  .empty-state {
+    padding: 40px 22px;
+    text-align: center;
+    color: var(--text-soft);
+    font-size: 14px;
+  }
+
+  #auth-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(30, 26, 20, 0.4);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    z-index: 100;
+  }
+  .auth-card {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 20px;
+    padding: 36px 32px;
+    max-width: 380px;
+    width: 100%;
+    box-shadow: 0 20px 50px -24px rgba(43, 38, 32, 0.35);
+  }
+  .auth-modal-close {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    background: none;
+    border: none;
+    color: var(--text-soft);
+    font-size: 16px;
+    cursor: pointer;
+  }
+  .auth-modal-close:hover { color: var(--clay); }
+
+  .guest-banner {
+    background: var(--blue-soft);
+    color: var(--blue);
+    font-size: 13px;
+    padding: 12px 16px;
+    border-radius: 12px;
+    margin-bottom: 20px;
+    display: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .guest-banner button {
+    background: var(--blue);
+    color: var(--surface);
+    border: none;
+    border-radius: 100px;
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .auth-tabs {
+    display: flex;
+    gap: 4px;
+    background: var(--bg);
+    border-radius: 12px;
+    padding: 4px;
+    margin: 20px 0 18px;
+  }
+  .auth-tab {
+    flex: 1;
+    background: none;
+    border: none;
+    padding: 9px;
+    border-radius: 9px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-soft);
+    cursor: pointer;
+  }
+  .auth-tab.active { background: var(--surface); color: var(--text); box-shadow: 0 2px 6px rgba(43,38,32,0.08); }
+  .auth-input {
+    width: 100%;
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 12px;
+    padding: 12px 14px;
+    color: var(--text);
+    font-family: inherit;
+    font-size: 14px;
+    margin-bottom: 10px;
+  }
+  .auth-error {
+    background: rgba(201, 122, 82, 0.12);
+    color: var(--clay);
+    font-size: 13px;
+    padding: 9px 12px;
+    border-radius: 10px;
+    margin-bottom: 12px;
+  }
+  .auth-hint {
+    font-size: 12px;
+    color: var(--text-soft);
+    margin-top: 14px;
+    text-align: center;
+  }
+
+  .user-email {
+    font-size: 12.5px;
+    color: var(--text-soft);
+    font-family: 'JetBrains Mono', monospace;
+  }
+  .logout-btn {
+    background: none;
+    border: 1px solid var(--hairline);
+    color: var(--text-soft);
+    border-radius: 100px;
+    padding: 7px 14px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .logout-btn:hover { color: var(--clay); border-color: var(--clay); }
+
+  .view { display: none; }
+  .view.active { display: block; }
+
+  .folder-block {
+    background: var(--surface);
+    border: 1px solid var(--hairline);
+    border-radius: 16px;
+    margin-bottom: 14px;
+    overflow: hidden;
+    transition: box-shadow 0.2s ease;
+  }
+  .folder-block.open { box-shadow: 0 10px 28px -18px rgba(43, 38, 32, 0.22); }
+  .folder-title {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 18px 22px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .folder-title:hover { background: var(--bg); }
+  .folder-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .folder-name { font-size: 15px; font-weight: 600; color: var(--text); flex: 1; }
+  .folder-count {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-soft);
+    background: var(--bg);
+    padding: 3px 10px;
+    border-radius: 100px;
+  }
+  .folder-chevron { font-size: 12px; color: var(--text-soft); transition: transform 0.2s ease; display: inline-block; }
+  .folder-block.open .folder-chevron { transform: rotate(90deg); }
+  .folder-content { display: none; border-top: 1px solid var(--hairline); }
+  .folder-block.open .folder-content { display: block; }
+  .folder-content .sample-row { padding: 12px 22px; }
+  .folder-content .sample-row:last-child { border-bottom: none; }
+
+  .stats-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 32px; }
+  .stat-card { background: var(--surface); border: 1px solid var(--hairline); border-radius: 14px; padding: 18px; text-align: center; }
+  .stat-value { font-family: 'Fraunces', serif; font-size: 28px; font-weight: 600; color: var(--text); }
+  .stat-label { font-size: 12px; color: var(--text-soft); margin-top: 4px; }
+
+  .breakdown-block { background: var(--surface); border: 1px solid var(--hairline); border-radius: 16px; padding: 22px; }
+  .breakdown-title { font-size: 14px; font-weight: 600; margin-bottom: 16px; color: var(--text); }
+  .breakdown-row { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .breakdown-row:last-child { margin-bottom: 0; }
+  .breakdown-label { width: 110px; font-size: 13px; color: var(--text); flex-shrink: 0; }
+  .breakdown-bar-track { flex: 1; height: 8px; background: var(--bg); border-radius: 100px; overflow: hidden; }
+  .breakdown-bar { height: 100%; border-radius: 100px; }
+  .breakdown-value { width: 22px; text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-soft); }
+
+  @media (max-width: 700px) {
+    .sample-row {
+      display: grid;
+      grid-template-columns: 28px 1fr auto auto;
+      grid-template-areas:
+        "play name  star delete"
+        "wave bpmc  keyc durc";
+      row-gap: 8px;
+      column-gap: 8px;
+      padding: 12px 16px;
     }
+    .play-btn { grid-area: play; }
+    .sample-info { grid-area: name; min-width: 0; }
+    .star-btn { grid-area: star; }
+    .delete-btn { grid-area: delete; }
+    .waveform-mini { grid-area: wave; }
+    .meta.bpm-col { grid-area: bpmc; text-align: left; }
+    .meta.key-col { grid-area: keyc; text-align: left; }
+    .meta.duration-col { grid-area: durc; text-align: left; }
+    .intro h1 { font-size: 27px; }
+    .stats-grid { grid-template-columns: repeat(2, 1fr); }
+    header { flex-wrap: wrap; }
   }
+</style>
+</head>
+<body>
 
-  req.session.userId = userId;
-  delete req.session.guestId;
-  req.session.email = email;
-  res.json({ success: true, email: email });
-});
+<div id="auth-modal-backdrop" onclick="closeAuthModalIfBackdrop(event)">
+  <div class="auth-card">
+    <button class="auth-modal-close" onclick="closeAuthModal()">✕</button>
+    <div class="brand-block">
+      <div class="brand"><span class="brand-final">FINAL</span><span class="brand-rest">sample_v.1</span></div>
+      <div class="brand-credit">by Rami</div>
+    </div>
+    <div class="auth-tabs">
+      <button class="auth-tab active" id="tab-login" onclick="switchAuthTab('login')">Iniciar sesión</button>
+      <button class="auth-tab" id="tab-register" onclick="switchAuthTab('register')">Crear cuenta</button>
+    </div>
+    <div class="auth-error" id="auth-error" style="display:none;"></div>
+    <input class="auth-input" type="email" id="auth-email" placeholder="tu@email.com">
+    <input class="auth-input" type="password" id="auth-password" placeholder="Contraseña">
+    <button class="upload-btn" id="auth-submit" style="width:100%;" onclick="submitAuth()">Entrar</button>
+    <div class="auth-hint" id="auth-hint">¿No tienes cuenta? Pulsa "Crear cuenta" arriba.</div>
+  </div>
+</div>
 
-app.post('/login', async (req, res) => {
-  const email = (req.body && req.body.email || '').trim().toLowerCase();
-  const password = (req.body && req.body.password) || '';
+<div class="wave-margin left" id="wave-left"></div>
+<div class="wave-margin right" id="wave-right"></div>
+<div class="app">
 
-  const users = loadUsers();
-  const user = users[email];
-  if (!user) {
-    return res.status(400).json({ error: 'Email o contraseña incorrectos' });
-  }
+  <header>
+    <div class="brand-block">
+      <div class="brand">
+        <span class="brand-final">FINAL</span><span class="brand-rest">sample_v.1</span>
+      </div>
+      <div class="brand-credit">by Rami</div>
+    </div>
+    <nav>
+      <a data-view="library" class="active" onclick="showView('library')">Biblioteca</a>
+      <a data-view="collections" onclick="showView('collections')">Colecciones</a>
+      <a data-view="analytics" onclick="showView('analytics')">Analítica</a>
+    </nav>
+    <div class="upload-zone">
+      <span class="upload-status" id="upload-status"></span>
+      <div id="account-area"></div>
+      <input type="file" id="file-input" accept="audio/*" multiple style="display: none;">
+      <button class="upload-btn" onclick="document.getElementById('file-input').click()">Subir samples</button>
+    </div>
+  </header>
 
-  const match = await bcrypt.compare(password, user.passwordHash);
-  if (!match) {
-    return res.status(400).json({ error: 'Email o contraseña incorrectos' });
-  }
+  <section id="view-library" class="view active">
+    <div class="intro">
+      <h1>Deja de buscar el sample que <em>sabías que tenías</em>.</h1>
+      <p>Sube tu carpeta una vez. Detectamos BPM y tonalidad automáticamente (en .wav y .mp3) para que solo tengas que buscar.</p>
+    </div>
 
-  req.session.userId = user.id;
-  req.session.email = email;
-  res.json({ success: true, email: email });
-});
+    <div class="guest-banner" id="guest-banner">
+      <span>Estás en modo invitado: tus samples se guardan solo en este navegador.</span>
+      <button onclick="openAuthModal()">Crear cuenta</button>
+    </div>
 
-app.post('/logout', (req, res) => {
-  req.session.destroy(function() {
-    res.json({ success: true });
-  });
-});
+    <div class="toolbar">
+      <input class="search-box" type="text" placeholder="Buscar por nombre o bpm" id="search-input">
+    </div>
 
-app.get('/me', (req, res) => {
-  if (req.session.userId) {
-    res.json({ loggedIn: true, email: req.session.email });
-  } else {
-    res.json({ loggedIn: false });
-  }
-});
+    <div class="results-count" id="results-count">Cargando...</div>
 
-// ---- Samples (todo requiere sesión iniciada) ----
+    <div class="grid" id="sample-grid"></div>
+  </section>
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const dir = userDir(effectiveId(req));
-    fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
-  },
-  filename: function (req, file, cb) {
-    cb(null, Date.now() + '-' + file.originalname);
-  }
-});
-const upload = multer({ storage: storage });
+  <section id="view-collections" class="view">
+    <div class="intro">
+      <h1>Todo <em>ordenado solo</em>.</h1>
+      <p>Agrupamos tus samples automáticamente según lo que detectamos en el nombre del archivo, y separamos las canciones completas del resto.</p>
+    </div>
+    <div id="collections-content"></div>
+  </section>
 
-function analyzeBPM(channelData) {
-  try {
-    const mt = new MusicTempo(channelData);
-    return Math.round(mt.tempo);
-  } catch (e) {
-    console.log('No se pudo analizar el BPM:', e.message);
-    return null;
-  }
-}
+  <section id="view-analytics" class="view">
+    <div class="intro">
+      <h1>Tu biblioteca <em>en números</em>.</h1>
+      <p>Un resumen rápido de todo lo que tienes subido hasta ahora.</p>
+    </div>
+    <div id="analytics-content"></div>
+  </section>
 
-const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-const MAJOR_PROFILE = [6.35,2.23,3.48,2.33,4.38,4.09,2.52,5.19,2.39,3.66,2.29,2.88];
-const MINOR_PROFILE = [6.33,2.68,3.52,5.38,2.60,3.53,2.54,4.75,3.98,2.69,3.34,3.17];
+</div>
 
-function correlate(a, b) {
-  const meanA = a.reduce((s, v) => s + v, 0) / a.length;
-  const meanB = b.reduce((s, v) => s + v, 0) / b.length;
-  let num = 0, denA = 0, denB = 0;
-  for (let i = 0; i < a.length; i++) {
-    num += (a[i] - meanA) * (b[i] - meanB);
-    denA += (a[i] - meanA) ** 2;
-    denB += (b[i] - meanB) ** 2;
-  }
-  return num / Math.sqrt(denA * denB || 1);
-}
-function rotateProfile(profile, r) {
-  const rotated = new Array(12);
-  for (let i = 0; i < 12; i++) rotated[i] = profile[(i - r + 12) % 12];
-  return rotated;
-}
-function estimateKeyFromChroma(chroma) {
-  let best = null;
-  let bestScore = -Infinity;
-  for (let r = 0; r < 12; r++) {
-    const majorScore = correlate(chroma, rotateProfile(MAJOR_PROFILE, r));
-    const minorScore = correlate(chroma, rotateProfile(MINOR_PROFILE, r));
-    if (majorScore > bestScore) { bestScore = majorScore; best = NOTE_NAMES[r] + ' mayor'; }
-    if (minorScore > bestScore) { bestScore = minorScore; best = NOTE_NAMES[r] + ' menor'; }
-  }
-  return best;
-}
-function analyzeKey(channelData, sampleRate) {
-  try {
-    const bufferSize = 4096;
-    Meyda.bufferSize = bufferSize;
-    Meyda.sampleRate = sampleRate;
-    const chromaSum = new Array(12).fill(0);
-    let frameCount = 0;
-    for (let i = 0; i + bufferSize <= channelData.length; i += bufferSize) {
-      const frame = channelData.slice(i, i + bufferSize);
-      const chroma = Meyda.extract('chroma', frame);
-      if (chroma) {
-        for (let j = 0; j < 12; j++) chromaSum[j] += chroma[j];
-        frameCount++;
-      }
-    }
-    if (frameCount === 0) return null;
-    const chromaAvg = chromaSum.map(v => v / frameCount);
-    return estimateKeyFromChroma(chromaAvg);
-  } catch (e) {
-    console.log('No se pudo analizar la tonalidad:', e.message);
-    return null;
-  }
-}
-function computeWaveformPeaks(channelData, numPeaks) {
-  const peaks = [];
-  const blockSize = Math.floor(channelData.length / numPeaks) || 1;
-  for (let i = 0; i < numPeaks; i++) {
-    const start = i * blockSize;
-    const end = Math.min(start + blockSize, channelData.length);
-    let sum = 0;
-    for (let j = start; j < end; j++) sum += Math.abs(channelData[j]);
-    const avg = end > start ? sum / (end - start) : 0;
-    peaks.push(avg);
-  }
-  const max = Math.max.apply(null, peaks.concat([0.0001]));
-  return peaks.map(function(p) { return Math.round((p / max) * 100) / 100; });
-}
-function convertToWav(inputPath, outputPath) {
-  return new Promise(function(resolve, reject) {
-    ffmpeg(inputPath)
-      .noVideo()
-      .audioChannels(1)
-      .audioFrequency(44100)
-      .format('wav')
-      .on('end', function() { resolve(); })
-      .on('error', function(err) { reject(err); })
-      .save(outputPath);
-  });
-}
+<audio id="player" style="display:none;"></audio>
 
-function detectType(originalName, durationSeconds) {
-  const name = originalName.toLowerCase();
-  if (durationSeconds && durationSeconds > 40) return 'cancion';
-  if (name.includes('kick')) return 'kick';
-  if (name.includes('snare')) return 'snare';
-  if (name.includes('hat')) return 'hihat';
-  if (name.includes('perc')) return 'percusion';
-  if (name.includes('loop')) return 'loop';
-  if (name.includes('808') || name.includes('bajo') || name.includes('bass')) return 'bajo';
-  if (name.includes('vocal') || name.includes('vox') || name.includes('voz')) return 'vocal';
-  if (name.includes('pad') || name.includes('string') || name.includes('melod') || name.includes('chord')) return 'melodico';
-  return 'otros';
-}
+<script>
+  let allFiles = [];
+  let openFolders = new Set();
 
-app.post('/upload', upload.single('sample'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No se recibió ningún archivo' });
-
-  const metadata = loadMetadata(effectiveId(req));
-  let bpm = null, key = null, duration = null, waveform = [];
-
-  if (req.file.originalname.toLowerCase().endsWith('.wav')) {
-    try {
-      const buffer = fs.readFileSync(req.file.path);
-      const decoded = wav.decode(buffer);
-      const channelData = decoded.channelData[0];
-      duration = channelData.length / decoded.sampleRate;
-      waveform = computeWaveformPeaks(channelData, 24);
-      bpm = analyzeBPM(channelData);
-      key = analyzeKey(channelData, decoded.sampleRate);
-    } catch (e) {
-      console.log('Error analizando el audio:', e.message);
-    }
-  } else {
-    // Otros formatos (mp3, ogg...): los convertimos a wav por detrás con ffmpeg
-    // para poder reutilizar el mismo análisis de BPM/tonalidad/forma de onda.
-    const tempWavPath = req.file.path + '.temp.wav';
-    try {
-      await convertToWav(req.file.path, tempWavPath);
-      const buffer = fs.readFileSync(tempWavPath);
-      const decoded = wav.decode(buffer);
-      const channelData = decoded.channelData[0];
-      duration = channelData.length / decoded.sampleRate;
-      waveform = computeWaveformPeaks(channelData, 24);
-      bpm = analyzeBPM(channelData);
-      key = analyzeKey(channelData, decoded.sampleRate);
-    } catch (e) {
-      console.log('No se pudo convertir/analizar el archivo (¿ffmpeg instalado?):', e.message);
-      // Si falla la conversión, al menos intentamos sacar la duración
-      try {
-        const info = await mm.parseFile(req.file.path);
-        duration = info.format.duration || null;
-      } catch (e2) {
-        console.log('Tampoco se pudo leer la duración:', e2.message);
-      }
-    } finally {
-      if (fs.existsSync(tempWavPath)) fs.unlinkSync(tempWavPath);
-    }
-  }
-
-  const type = detectType(req.file.originalname, duration);
-
-  metadata[req.file.filename] = {
-    bpm: bpm, key: key, duration: duration, type: type, waveform: waveform,
-    favorite: false, customName: null, tags: []
+  const TYPE_LABELS = {
+    cancion: 'Canciones completas',
+    kick: 'Kicks',
+    snare: 'Snares',
+    hihat: 'Hi-hats',
+    percusion: 'Percusión',
+    loop: 'Loops',
+    bajo: 'Bajos / 808',
+    melodico: 'Melódicos',
+    vocal: 'Vocales',
+    otros: 'Otros'
   };
-  saveMetadata(effectiveId(req), metadata);
+  const TYPE_ORDER = ['cancion','kick','snare','hihat','percusion','loop','bajo','melodico','vocal','otros'];
+  const TYPE_COLORS = {
+    cancion: '#c97a52', kick: '#2f5f74', snare: '#6b8e9e', hihat: '#9db4bd',
+    percusion: '#527e8f', loop: '#3d7691', bajo: '#4a5f3d', melodico: '#8c6a9e',
+    vocal: '#b8894a', otros: '#a89f8f'
+  };
 
-  res.json({ success: true, filename: req.file.filename });
-});
+  const PLAY_ICON = '<svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>';
+  const PAUSE_ICON = '<svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>';
+  let currentlyPlaying = null;
 
-app.get('/samples', (req, res) => {
-  const dir = userDir(effectiveId(req));
-  fs.readdir(dir, (err, files) => {
-    if (err) return res.json({ files: [] });
+  function sanitize(text) {
+    return text.replace(/['"\`]/g, '').trim();
+  }
 
-    const metadata = loadMetadata(effectiveId(req));
-    const audioFiles = files.filter(f => f !== 'metadata.json');
+  function formatDuration(seconds) {
+    if (!seconds && seconds !== 0) return '—';
+    const m = Math.floor(seconds / 60);
+    const s = Math.round(seconds % 60);
+    return m + ':' + (s < 10 ? '0' : '') + s;
+  }
 
-    const result = audioFiles.map(function(f) {
-      const m = metadata[f] || {};
-      return {
-        filename: f,
-        bpm: m.bpm || null,
-        key: m.key || null,
-        type: m.type || 'otros',
-        waveform: m.waveform || [],
-        favorite: m.favorite || false,
-        customName: m.customName || null,
-        tags: m.tags || [],
-        duration: m.duration || null
-      };
+  function showView(view) {
+    document.querySelectorAll('.view').forEach(function(v) { v.classList.remove('active'); });
+    document.getElementById('view-' + view).classList.add('active');
+    document.querySelectorAll('nav a').forEach(function(a) { a.classList.remove('active'); });
+    document.querySelector('nav a[data-view="' + view + '"]').classList.add('active');
+    refreshCurrentView();
+  }
+
+  function refreshCurrentView() {
+    const active = document.querySelector('nav a.active').dataset.view;
+    if (active === 'library') {
+      const rawTerm = (document.getElementById('search-input').value || '').toLowerCase().trim();
+      const bpmTerm = rawTerm.replace(/bpm/g, '').trim();
+      const filtered = rawTerm
+        ? allFiles.filter(function(f) {
+            const name = (f.customName || f.filename).toLowerCase();
+            const nameMatch = name.includes(rawTerm);
+            const bpmMatch = f.bpm && (String(f.bpm).includes(rawTerm) || (bpmTerm && String(f.bpm).includes(bpmTerm)));
+            return nameMatch || bpmMatch;
+          })
+        : allFiles;
+      renderFiles(filtered);
+    } else if (active === 'collections') {
+      renderCollections();
+    } else if (active === 'analytics') {
+      renderAnalytics();
+    }
+  }
+
+  async function loadSamples() {
+    const res = await fetch('/samples');
+    const data = await res.json();
+    allFiles = data.files || [];
+    refreshCurrentView();
+  }
+
+  function buildWaveformHTML(file) {
+    if (!file.waveform || file.waveform.length === 0) {
+      return '<div class="waveform-mini"></div>';
+    }
+    const bars = file.waveform.map(function(v) {
+      const h = Math.max(2, Math.round(v * 22));
+      return '<span style="height:' + h + 'px"></span>';
+    }).join('');
+    return '<div class="waveform-mini">' + bars + '</div>';
+  }
+
+  function buildRowHTML(file) {
+    const displayName = file.customName || (file.filename.split('-').slice(1).join('-') || file.filename);
+    const bpmTag = file.bpm
+      ? '<div class="meta bpm-col"><strong>' + file.bpm + '</strong> bpm</div>'
+      : '<div class="meta bpm-col">—</div>';
+    const keyTag = file.key
+      ? '<div class="meta key-col"><strong>' + file.key + '</strong></div>'
+      : '<div class="meta key-col">—</div>';
+    const durationTag = '<div class="meta duration-col">' + formatDuration(file.duration) + '</div>';
+
+    const tagsHTML = (file.tags || []).map(function(t) {
+      return '<span class="tag manual">' + t +
+        ' <span class="tag-remove" onclick="removeTag(event, \'' + file.filename + '\', \'' + t + '\')">×</span></span>';
+    }).join('');
+
+    return (
+      '<div class="sample-row" draggable="true" ondragstart="handleDragStart(event, \'' + file.filename + '\', \'' + displayName.replace(/'/g, "") + '\')">' +
+        '<button class="play-btn" data-filename="' + file.filename + '" onclick="event.stopPropagation(); toggleSample(\'' + file.filename + '\')">' +
+          PLAY_ICON +
+        '</button>' +
+        '<div class="sample-info">' +
+          '<div class="sample-name-row">' +
+            '<span class="sample-name">' + displayName + '</span>' +
+            '<button class="icon-btn" onclick="event.stopPropagation(); startRename(\'' + file.filename + '\')" title="Renombrar">✎</button>' +
+          '</div>' +
+          '<div class="sample-tags">' + tagsHTML +
+            '<button class="tag-add" onclick="event.stopPropagation(); addTag(\'' + file.filename + '\')">+ tag</button>' +
+          '</div>' +
+        '</div>' +
+        buildWaveformHTML(file) +
+        bpmTag +
+        keyTag +
+        durationTag +
+        '<button class="star-btn ' + (file.favorite ? 'active' : '') + '" onclick="event.stopPropagation(); toggleFavorite(\'' + file.filename + '\')" title="Favorito">' + (file.favorite ? '★' : '☆') + '</button>' +
+        '<button class="delete-btn" onclick="event.stopPropagation(); deleteSample(\'' + file.filename + '\')" title="Borrar">✕</button>' +
+      '</div>'
+    );
+  }
+
+  function renderFiles(files) {
+    const grid = document.getElementById('sample-grid');
+    const count = document.getElementById('results-count');
+
+    count.textContent = files.length + (files.length === 1 ? ' resultado' : ' resultados');
+
+    if (files.length === 0) {
+      grid.innerHTML = '<div class="empty-state">No hay samples que coincidan con esa búsqueda.</div>';
+      return;
+    }
+
+    grid.innerHTML = files.map(buildRowHTML).join('');
+  }
+
+  function toggleFolder(type) {
+    const block = document.getElementById('folder-' + type);
+    block.classList.toggle('open');
+    if (block.classList.contains('open')) {
+      openFolders.add(type);
+    } else {
+      openFolders.delete(type);
+    }
+  }
+
+  function renderCollections() {
+    const container = document.getElementById('collections-content');
+
+    if (allFiles.length === 0) {
+      container.innerHTML = '<div class="empty-state">Aún no has subido nada.</div>';
+      return;
+    }
+
+    const groups = {};
+    allFiles.forEach(function(file) {
+      const t = file.type || 'otros';
+      if (!groups[t]) groups[t] = [];
+      groups[t].push(file);
     });
 
-    res.json({ files: result });
+    let html = '';
+    TYPE_ORDER.forEach(function(type) {
+      if (!groups[type] || groups[type].length === 0) return;
+      const color = TYPE_COLORS[type] || 'var(--text-soft)';
+      const isOpen = openFolders.has(type) ? ' open' : '';
+      html += '<div class="folder-block' + isOpen + '" id="folder-' + type + '">';
+      html += '<div class="folder-title" onclick="toggleFolder(\'' + type + '\')">';
+      html += '<span class="folder-dot" style="background:' + color + '"></span>';
+      html += '<span class="folder-name">' + TYPE_LABELS[type] + '</span>';
+      html += '<span class="folder-count">' + groups[type].length + '</span>';
+      html += '<span class="folder-chevron">▸</span>';
+      html += '</div>';
+      html += '<div class="folder-content">' + groups[type].map(buildRowHTML).join('') + '</div>';
+      html += '</div>';
+    });
+
+    container.innerHTML = html;
+  }
+
+  function statCard(value, label) {
+    return '<div class="stat-card"><div class="stat-value">' + value + '</div><div class="stat-label">' + label + '</div></div>';
+  }
+
+  function renderAnalytics() {
+    const container = document.getElementById('analytics-content');
+
+    if (allFiles.length === 0) {
+      container.innerHTML = '<div class="empty-state">Aún no has subido nada.</div>';
+      return;
+    }
+
+    const songs = allFiles.filter(function(f) { return f.type === 'cancion'; });
+    const bpmValues = allFiles.filter(function(f) { return f.bpm; }).map(function(f) { return f.bpm; });
+    const avgBpm = bpmValues.length
+      ? Math.round(bpmValues.reduce(function(a, b) { return a + b; }, 0) / bpmValues.length)
+      : null;
+
+    const keyCounts = {};
+    allFiles.forEach(function(f) {
+      if (f.key) keyCounts[f.key] = (keyCounts[f.key] || 0) + 1;
+    });
+    let topKey = '—';
+    let topKeyCount = 0;
+    Object.keys(keyCounts).forEach(function(k) {
+      if (keyCounts[k] > topKeyCount) { topKey = k; topKeyCount = keyCounts[k]; }
+    });
+
+    const typeCounts = {};
+    allFiles.forEach(function(f) {
+      const t = f.type || 'otros';
+      typeCounts[t] = (typeCounts[t] || 0) + 1;
+    });
+    const maxCount = Math.max.apply(null, Object.values(typeCounts));
+
+    let html = '<div class="stats-grid">' +
+      statCard(allFiles.length, 'Total archivos') +
+      statCard(songs.length, 'Canciones') +
+      statCard(avgBpm !== null ? avgBpm : '—', 'BPM medio') +
+      statCard(topKey, 'Tonalidad top') +
+    '</div>';
+
+    html += '<div class="breakdown-block"><div class="breakdown-title">Por tipo</div>';
+    TYPE_ORDER.forEach(function(type) {
+      if (!typeCounts[type]) return;
+      const pct = Math.round((typeCounts[type] / maxCount) * 100);
+      const color = TYPE_COLORS[type] || 'var(--text-soft)';
+      html += '<div class="breakdown-row">' +
+        '<div class="breakdown-label">' + TYPE_LABELS[type] + '</div>' +
+        '<div class="breakdown-bar-track"><div class="breakdown-bar" style="width:' + pct + '%; background:' + color + '"></div></div>' +
+        '<div class="breakdown-value">' + typeCounts[type] + '</div>' +
+      '</div>';
+    });
+    html += '</div>';
+
+    container.innerHTML = html;
+  }
+
+  function resetAllButtons() {
+    document.querySelectorAll('.play-btn').forEach(function(btn) { btn.innerHTML = PLAY_ICON; });
+  }
+
+  function toggleSample(filename) {
+    const player = document.getElementById('player');
+    const btns = document.querySelectorAll('.play-btn[data-filename="' + filename + '"]');
+
+    if (currentlyPlaying === filename && !player.paused) {
+      player.pause();
+      btns.forEach(function(b) { b.innerHTML = PLAY_ICON; });
+      currentlyPlaying = null;
+      return;
+    }
+
+    resetAllButtons();
+    player.src = '/uploads/' + filename;
+    player.play();
+    btns.forEach(function(b) { b.innerHTML = PAUSE_ICON; });
+    currentlyPlaying = filename;
+  }
+
+  document.getElementById('player').addEventListener('ended', function() {
+    resetAllButtons();
+    currentlyPlaying = null;
   });
-});
 
-app.get('/uploads/:filename', (req, res) => {
-  const filePath = path.join(userDir(effectiveId(req)), req.params.filename);
-  res.sendFile(filePath, function(err) {
-    if (err) res.status(404).send('Archivo no encontrado');
+  function getMimeType(filename) {
+    const lower = filename.toLowerCase();
+    if (lower.endsWith('.mp3')) return 'audio/mpeg';
+    if (lower.endsWith('.wav')) return 'audio/wav';
+    if (lower.endsWith('.ogg')) return 'audio/ogg';
+    return 'application/octet-stream';
+  }
+
+  function handleDragStart(e, filename, displayName) {
+    const url = window.location.origin + '/uploads/' + filename;
+    const mime = getMimeType(filename);
+    e.dataTransfer.effectAllowed = 'copy';
+    e.dataTransfer.setData('DownloadURL', mime + ':' + displayName + ':' + url);
+  }
+
+  async function deleteSample(filename) {
+    const confirmDelete = confirm('¿Seguro que quieres borrar este sample? No se puede deshacer.');
+    if (!confirmDelete) return;
+
+    const res = await fetch('/samples/' + encodeURIComponent(filename), { method: 'DELETE' });
+    const data = await res.json();
+
+    if (data.success) {
+      loadSamples();
+    } else {
+      alert('No se pudo borrar el archivo');
+    }
+  }
+
+  async function toggleFavorite(filename) {
+    const res = await fetch('/samples/' + encodeURIComponent(filename) + '/favorite', { method: 'POST' });
+    const data = await res.json();
+    if (data.success) loadSamples();
+  }
+
+  function startRename(filename) {
+    const file = allFiles.find(function(f) { return f.filename === filename; });
+    const current = file ? (file.customName || file.filename.split('-').slice(1).join('-')) : '';
+    const input = window.prompt('Nuevo nombre para este sample:', current);
+    if (input === null) return;
+    const clean = sanitize(input);
+    if (!clean) return;
+    renameSample(filename, clean);
+  }
+
+  async function renameSample(filename, newName) {
+    const res = await fetch('/samples/' + encodeURIComponent(filename) + '/name', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName })
+    });
+    const data = await res.json();
+    if (data.success) {
+      loadSamples();
+    } else {
+      alert('No se pudo renombrar el sample');
+    }
+  }
+
+  function addTag(filename) {
+    const input = window.prompt('Añadir etiqueta:');
+    if (!input) return;
+    const clean = sanitize(input);
+    if (!clean) return;
+    const file = allFiles.find(function(f) { return f.filename === filename; });
+    const tags = (file && file.tags) ? file.tags.slice() : [];
+    if (tags.indexOf(clean) !== -1) return;
+    tags.push(clean);
+    saveTags(filename, tags);
+  }
+
+  function removeTag(event, filename, tag) {
+    event.stopPropagation();
+    const file = allFiles.find(function(f) { return f.filename === filename; });
+    const tags = (file && file.tags) ? file.tags.filter(function(t) { return t !== tag; }) : [];
+    saveTags(filename, tags);
+  }
+
+  async function saveTags(filename, tags) {
+    const res = await fetch('/samples/' + encodeURIComponent(filename) + '/tags', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags: tags })
+    });
+    const data = await res.json();
+    if (data.success) loadSamples();
+  }
+
+  document.getElementById('file-input').addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length === 0) return;
+
+    const statusEl = document.getElementById('upload-status');
+
+    for (let i = 0; i < files.length; i++) {
+      statusEl.textContent = 'Subiendo ' + (i + 1) + ' de ' + files.length + '...';
+      const formData = new FormData();
+      formData.append('sample', files[i]);
+      await fetch('/upload', { method: 'POST', body: formData });
+    }
+
+    statusEl.textContent = '';
+    e.target.value = '';
+    loadSamples();
   });
-});
 
-app.delete('/samples/:filename', (req, res) => {
-  const filePath = path.join(userDir(effectiveId(req)), req.params.filename);
-  fs.unlink(filePath, (err) => {
-    if (err) return res.status(500).json({ error: 'No se pudo borrar el archivo' });
-    const metadata = loadMetadata(effectiveId(req));
-    delete metadata[req.params.filename];
-    saveMetadata(effectiveId(req), metadata);
-    res.json({ success: true });
+  document.getElementById('search-input').addEventListener('input', function() {
+    refreshCurrentView();
   });
-});
 
-app.post('/samples/:filename/favorite', (req, res) => {
-  const metadata = loadMetadata(effectiveId(req));
-  if (!metadata[req.params.filename]) return res.status(404).json({ error: 'No encontrado' });
-  metadata[req.params.filename].favorite = !metadata[req.params.filename].favorite;
-  saveMetadata(effectiveId(req), metadata);
-  res.json({ success: true, favorite: metadata[req.params.filename].favorite });
-});
+function generateWaveformHeights(count) {
+    // Camina suavemente entre valores altos y bajos, como una forma de onda real
+    const heights = [];
+    let current = 0.3;
+    for (let i = 0; i < count; i++) {
+      const target = 0.08 + Math.random() * 0.92;
+      current = current * 0.5 + target * 0.5;
+      heights.push(current);
+    }
+    return heights;
+  }
 
-app.patch('/samples/:filename/name', (req, res) => {
-  const name = req.body && req.body.name;
-  if (!name || !name.trim()) return res.status(400).json({ error: 'Nombre vacío' });
-  const metadata = loadMetadata(effectiveId(req));
-  if (!metadata[req.params.filename]) return res.status(404).json({ error: 'No encontrado' });
-  metadata[req.params.filename].customName = name.trim();
-  saveMetadata(effectiveId(req), metadata);
-  res.json({ success: true, customName: metadata[req.params.filename].customName });
-});
+  function buildAmbientWaveform(containerId, count) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    const items = [];
+    const heights = generateWaveformHeights(count);
 
-app.patch('/samples/:filename/tags', (req, res) => {
-  const tags = req.body && req.body.tags;
-  if (!Array.isArray(tags)) return res.status(400).json({ error: 'tags debe ser un array' });
-  const metadata = loadMetadata(effectiveId(req));
-  if (!metadata[req.params.filename]) return res.status(404).json({ error: 'No encontrado' });
-  metadata[req.params.filename].tags = tags;
-  saveMetadata(effectiveId(req), metadata);
-  res.json({ success: true, tags: metadata[req.params.filename].tags });
-});
+    for (let i = 0; i < count; i++) {
+      const wrap = document.createElement('div');
+      wrap.className = 'wave-bar-wrap';
+      const bar = document.createElement('div');
+      bar.className = 'wave-bar';
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Servidor corriendo en http://localhost:${PORT}`);
-});
+      const baseWidth = 12 + heights[i] * 84;
+      bar.style.width = baseWidth + 'px';
+
+      const baseDuration = 3.5 + Math.random() * 3.5;
+      bar.style.animationDuration = baseDuration + 's';
+      bar.style.animationDelay = (Math.random() * 4) + 's';
+
+      wrap.appendChild(bar);
+      container.appendChild(wrap);
+      items.push({ wrap: wrap, bar: bar, baseDuration: baseDuration });
+    }
+
+    container.addEventListener('mousemove', function(e) {
+      const rect = container.getBoundingClientRect();
+      const mouseY = e.clientY - rect.top;
+
+      items.forEach(function(item) {
+        const barRect = item.wrap.getBoundingClientRect();
+        const barY = barRect.top - rect.top + barRect.height / 2;
+        const distance = Math.abs(mouseY - barY);
+        const radius = 110;
+
+        if (distance < radius) {
+          const strength = 1 - (distance / radius);
+          const fastDuration = Math.max(3.3, item.baseDuration - strength * (item.baseDuration - 3.3));
+          item.bar.style.animationDuration = fastDuration + 's';
+          item.bar.style.opacity = 0.5 + strength * 0.5;
+          item.bar.style.filter = 'brightness(' + (1 + strength * 1.1) + ') drop-shadow(0 0 ' + (strength * 12) + 'px #ffffff)';
+        } else {
+          item.bar.style.animationDuration = item.baseDuration + 's';
+          item.bar.style.opacity = '';
+          item.bar.style.filter = '';
+        }
+      });
+    });
+
+    container.addEventListener('mouseleave', function() {
+      items.forEach(function(item) {
+        item.bar.style.animationDuration = item.baseDuration + 's';
+        item.bar.style.opacity = '';
+        item.bar.style.filter = '';
+      });
+    });
+  }
+
+  buildAmbientWaveform('wave-left', 70);
+  buildAmbientWaveform('wave-right', 70);
+
+let authMode = 'login';
+
+  function switchAuthTab(mode) {
+    authMode = mode;
+    document.getElementById('tab-login').classList.toggle('active', mode === 'login');
+    document.getElementById('tab-register').classList.toggle('active', mode === 'register');
+    document.getElementById('auth-submit').textContent = mode === 'login' ? 'Entrar' : 'Crear cuenta';
+    document.getElementById('auth-hint').textContent = mode === 'login'
+      ? '¿No tienes cuenta? Pulsa "Crear cuenta" arriba.'
+      : 'La contraseña debe tener al menos 6 caracteres. Tus samples de invitado se guardarán en la cuenta nueva.';
+    document.getElementById('auth-error').style.display = 'none';
+  }
+
+  function openAuthModal() {
+    document.getElementById('auth-modal-backdrop').style.display = 'flex';
+  }
+  function closeAuthModal() {
+    document.getElementById('auth-modal-backdrop').style.display = 'none';
+  }
+  function closeAuthModalIfBackdrop(e) {
+    if (e.target.id === 'auth-modal-backdrop') closeAuthModal();
+  }
+
+  async function submitAuth() {
+    const email = document.getElementById('auth-email').value.trim();
+    const password = document.getElementById('auth-password').value;
+    const errorEl = document.getElementById('auth-error');
+    errorEl.style.display = 'none';
+
+    const endpoint = authMode === 'login' ? '/login' : '/register';
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: email, password: password })
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      closeAuthModal();
+      renderAccountArea(true, data.email);
+      loadSamples();
+    } else {
+      errorEl.textContent = data.error || 'Algo ha ido mal';
+      errorEl.style.display = 'block';
+    }
+  }
+
+  async function logout() {
+    await fetch('/logout', { method: 'POST' });
+    location.reload();
+  }
+
+  function renderAccountArea(loggedIn, email) {
+    const el = document.getElementById('account-area');
+    const banner = document.getElementById('guest-banner');
+    if (loggedIn) {
+      el.innerHTML = '<span class="user-email">' + email + '</span> <button class="logout-btn" onclick="logout()">Cerrar sesión</button>';
+      banner.style.display = 'none';
+    } else {
+      el.innerHTML = '<button class="logout-btn" onclick="openAuthModal()">Iniciar sesión</button>';
+      banner.style.display = 'flex';
+    }
+  }
+
+  async function checkAuth() {
+    const res = await fetch('/me');
+    const data = await res.json();
+    renderAccountArea(data.loggedIn, data.email);
+  }
+
+  checkAuth();
+  loadSamples();
+</script>
+</body>
+</html>
