@@ -276,9 +276,15 @@ app.post('/upload', upload.single('sample'), async (req, res) => {
       const decoded = wav.decode(buffer);
       const channelData = decoded.channelData[0];
       duration = channelData.length / decoded.sampleRate;
-      bpm = analyzeBPM(channelData);
-      key = analyzeKey(channelData, decoded.sampleRate);
       waveform = computeWaveformPeaks(channelData, 24);
+
+      // Las canciones completas tardan mucho más en analizar BPM/tonalidad
+      // (y el servidor gratuito tiene pocos recursos), así que nos lo saltamos
+      // para esos casos y solo lo hacemos con samples cortos.
+      if (duration <= 45) {
+        bpm = analyzeBPM(channelData);
+        key = analyzeKey(channelData, decoded.sampleRate);
+      }
     } catch (e) {
       console.log('Error analizando el audio:', e.message);
     }
@@ -292,9 +298,12 @@ app.post('/upload', upload.single('sample'), async (req, res) => {
       const decoded = wav.decode(buffer);
       const channelData = decoded.channelData[0];
       duration = channelData.length / decoded.sampleRate;
-      bpm = analyzeBPM(channelData);
-      key = analyzeKey(channelData, decoded.sampleRate);
       waveform = computeWaveformPeaks(channelData, 24);
+
+      if (duration <= 45) {
+        bpm = analyzeBPM(channelData);
+        key = analyzeKey(channelData, decoded.sampleRate);
+      }
     } catch (e) {
       console.log('No se pudo convertir/analizar el archivo (¿ffmpeg instalado?):', e.message);
       // Si falla la conversión, al menos intentamos sacar la duración

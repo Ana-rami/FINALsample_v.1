@@ -463,9 +463,24 @@
   .breakdown-value { width: 22px; text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--text-soft); }
 
   @media (max-width: 700px) {
-    .sample-row { grid-template-columns: 30px 1fr 55px 26px 26px; padding: 12px 16px; }
-    .duration-col { display: none; }
-    .waveform-mini, .meta.key-col { display: none; }
+    .sample-row {
+      display: grid;
+      grid-template-columns: 28px 1fr auto auto;
+      grid-template-areas:
+        "play name  star delete"
+        "wave bpmc  keyc durc";
+      row-gap: 8px;
+      column-gap: 8px;
+      padding: 12px 16px;
+    }
+    .play-btn { grid-area: play; }
+    .sample-info { grid-area: name; min-width: 0; }
+    .star-btn { grid-area: star; }
+    .delete-btn { grid-area: delete; }
+    .waveform-mini { grid-area: wave; }
+    .meta.bpm-col { grid-area: bpmc; text-align: left; }
+    .meta.key-col { grid-area: keyc; text-align: left; }
+    .meta.duration-col { grid-area: durc; text-align: left; }
     .intro h1 { font-size: 27px; }
     .stats-grid { grid-template-columns: repeat(2, 1fr); }
     header { flex-wrap: wrap; }
@@ -645,8 +660,8 @@
   function buildRowHTML(file) {
     const displayName = file.customName || (file.filename.split('-').slice(1).join('-') || file.filename);
     const bpmTag = file.bpm
-      ? '<div class="meta"><strong>' + file.bpm + '</strong> bpm</div>'
-      : '<div class="meta">—</div>';
+      ? '<div class="meta bpm-col"><strong>' + file.bpm + '</strong> bpm</div>'
+      : '<div class="meta bpm-col">—</div>';
     const keyTag = file.key
       ? '<div class="meta key-col"><strong>' + file.key + '</strong></div>'
       : '<div class="meta key-col">—</div>';
@@ -662,7 +677,7 @@
         '<button class="play-btn" data-filename="' + file.filename + '" onclick="event.stopPropagation(); toggleSample(\'' + file.filename + '\')">' +
           PLAY_ICON +
         '</button>' +
-        '<div>' +
+        '<div class="sample-info">' +
           '<div class="sample-name-row">' +
             '<span class="sample-name">' + displayName + '</span>' +
             '<button class="icon-btn" onclick="event.stopPropagation(); startRename(\'' + file.filename + '\')" title="Renombrar">✎</button>' +
