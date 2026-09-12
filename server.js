@@ -1,10 +1,15 @@
+require('dotenv').config();
+
 const express = require('express');
 const multer = require('multer');
 const path = require('path');
+const os = require('os');
 const fs = require('fs');
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
-const session = require('express-session');
+const jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser');
+const { createClient } = require('@supabase/supabase-js');
 const wav = require('node-wav');
 const MusicTempo = require('music-tempo');
 const Meyda = require('meyda');
@@ -13,61 +18,43 @@ const ffmpeg = require('fluent-ffmpeg');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const USERS_FILE = 'users.json';
+const JWT_SECRET = process.env.JWT_SECRET || 'cambia-esto-en-produccion';
+const BUCKET = 'samples';
+
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
 app.use(express.json());
-app.use(session({
-  // Para uso personal en tu ordenador esto está bien.
-  // Si algún día publicas esta app en internet para que otros la usen,
-  // cambia este texto por algo único y no lo compartas con nadie.
-  secret: 'finalsample-v1-clave-local-cambiame-si-publicas',
-  resave: false,
-  saveUninitialized: false,
-  cookie: { maxAge: 1000 * 60 * 60 * 24 * 30 } // la sesión dura 30 días
-}));
-
+app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
-app.use(ensureIdentity);
 
-function loadUsers() {
-  try {
-    return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
-  } catch (e) {
-    return {};
-  }
-}
-function saveUsers(data) {
-  fs.writeFileSync(USERS_FILE, JSON.stringify(data, null, 2));
-}
+// ---- Identidad: cuenta real (JWT) o invitado (cookie simple) ----
 
-// Todo el mundo tiene una "identidad": si no ha iniciado sesión,
-// se le asigna un id de invitado guardado en su cookie de sesión.
-// Así puede usar la app sin cuenta, pero sus samples quedan ligados a ese navegador.
 function ensureIdentity(req, res, next) {
-  if (!req.session.userId && !req.session.guestId) {
-    req.session.guestId = 'guest_' + crypto.randomBytes(8).toString('hex');
+  const token = req.cookies.auth_token;
+  if (token) {
+    try {
+      const payload = jwt.verify(token, JWT_SECRET);
+      req.userId = payload.userId;
+      req.userEmail = payload.email;
+      return next();
+    } catch (e) {
+      // token inválido o caducado, seguimos como invitado
+    }
+  }
+
+  if (!req.cookies.guest_id) {
+    const guestId = 'guest_' + crypto.randomBytes(8).toString('hex');
+    res.cookie('guest_id', guestId, { maxAge: 1000 * 60 * 60 * 24 * 365, httpOnly: true });
+    req.guestId = guestId;
+  } else {
+    req.guestId = req.cookies.guest_id;
   }
   next();
 }
-function effectiveId(req) {
-  return req.session.userId || req.session.guestId;
-}
+app.use(ensureIdentity);
 
-function userDir(userId) {
-  return path.join(__dirname, 'uploads', userId);
-}
-function metadataPath(userId) {
-  return path.join(userDir(userId), 'metadata.json');
-}
-function loadMetadata(userId) {
-  try {
-    return JSON.parse(fs.readFileSync(metadataPath(userId), 'utf8'));
-  } catch (e) {
-    return {};
-  }
-}
-function saveMetadata(userId, data) {
-  fs.writeFileSync(metadataPath(userId), JSON.stringify(data, null, 2));
+function effectiveId(req) {
+  return req.userId || req.guestId;
 }
 
 // ---- Cuentas ----
@@ -80,34 +67,29 @@ app.post('/register', async (req, res) => {
     return res.status(400).json({ error: 'Email y contraseña (mínimo 6 caracteres) son obligatorios' });
   }
 
-  const users = loadUsers();
-  if (users[email]) {
+  const { data: existing } = await supabase.from('users').select('id').eq('email', email).maybeSingle();
+  if (existing) {
     return res.status(400).json({ error: 'Ya existe una cuenta con ese email' });
   }
 
   const passwordHash = await bcrypt.hash(password, 10);
   const userId = crypto.randomBytes(8).toString('hex');
-  users[email] = { id: userId, passwordHash: passwordHash };
-  saveUsers(users);
 
-  fs.mkdirSync(userDir(userId), { recursive: true });
-
-  // Si venía usando la app como invitado, movemos sus samples a la cuenta nueva
-  const oldGuestId = req.session.guestId;
-  if (oldGuestId) {
-    const oldDir = userDir(oldGuestId);
-    if (fs.existsSync(oldDir)) {
-      const files = fs.readdirSync(oldDir);
-      files.forEach(function(f) {
-        fs.renameSync(path.join(oldDir, f), path.join(userDir(userId), f));
-      });
-      fs.rmdirSync(oldDir);
-    }
+  const { error } = await supabase.from('users').insert({ id: userId, email: email, password_hash: passwordHash });
+  if (error) {
+    console.log('Error creando usuario:', error.message);
+    return res.status(500).json({ error: 'No se pudo crear la cuenta' });
   }
 
-  req.session.userId = userId;
-  delete req.session.guestId;
-  req.session.email = email;
+  // Si venía como invitado, sus samples pasan a pertenecer a la cuenta nueva
+  const oldGuestId = req.guestId;
+  if (oldGuestId) {
+    await supabase.from('samples').update({ owner_id: userId }).eq('owner_id', oldGuestId);
+  }
+
+  const token = jwt.sign({ userId: userId, email: email }, JWT_SECRET, { expiresIn: '30d' });
+  res.cookie('auth_token', token, { maxAge: 1000 * 60 * 60 * 24 * 30, httpOnly: true });
+  res.clearCookie('guest_id');
   res.json({ success: true, email: email });
 });
 
@@ -115,56 +97,43 @@ app.post('/login', async (req, res) => {
   const email = (req.body && req.body.email || '').trim().toLowerCase();
   const password = (req.body && req.body.password) || '';
 
-  const users = loadUsers();
-  const user = users[email];
+  const { data: user } = await supabase.from('users').select('*').eq('email', email).maybeSingle();
   if (!user) {
     return res.status(400).json({ error: 'Email o contraseña incorrectos' });
   }
 
-  const match = await bcrypt.compare(password, user.passwordHash);
+  const match = await bcrypt.compare(password, user.password_hash);
   if (!match) {
     return res.status(400).json({ error: 'Email o contraseña incorrectos' });
   }
 
-  req.session.userId = user.id;
-  req.session.email = email;
+  const token = jwt.sign({ userId: user.id, email: email }, JWT_SECRET, { expiresIn: '30d' });
+  res.cookie('auth_token', token, { maxAge: 1000 * 60 * 60 * 24 * 30, httpOnly: true });
   res.json({ success: true, email: email });
 });
 
 app.post('/logout', (req, res) => {
-  req.session.destroy(function() {
-    res.json({ success: true });
-  });
+  res.clearCookie('auth_token');
+  res.json({ success: true });
 });
 
 app.get('/me', (req, res) => {
-  if (req.session.userId) {
-    res.json({ loggedIn: true, email: req.session.email });
+  if (req.userId) {
+    res.json({ loggedIn: true, email: req.userEmail });
   } else {
     res.json({ loggedIn: false });
   }
 });
 
-// ---- Samples (todo requiere sesión iniciada) ----
+// ---- Análisis de audio (igual que antes) ----
 
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const dir = userDir(effectiveId(req));
-    fs.mkdirSync(dir, { recursive: true });
-    cb(null, dir);
-  },
-  filename: function (req, file, cb) {
-    cb(null, Date.now() + '-' + file.originalname);
-  }
-});
-const upload = multer({ storage: storage });
+const upload = multer({ storage: multer.memoryStorage() });
 
 function analyzeBPM(channelData) {
   try {
     const mt = new MusicTempo(channelData);
     return Math.round(mt.tempo);
   } catch (e) {
-    console.log('No se pudo analizar el BPM:', e.message);
     return null;
   }
 }
@@ -190,8 +159,7 @@ function rotateProfile(profile, r) {
   return rotated;
 }
 function estimateKeyFromChroma(chroma) {
-  let best = null;
-  let bestScore = -Infinity;
+  let best = null, bestScore = -Infinity;
   for (let r = 0; r < 12; r++) {
     const majorScore = correlate(chroma, rotateProfile(MAJOR_PROFILE, r));
     const minorScore = correlate(chroma, rotateProfile(MINOR_PROFILE, r));
@@ -219,7 +187,6 @@ function analyzeKey(channelData, sampleRate) {
     const chromaAvg = chromaSum.map(v => v / frameCount);
     return estimateKeyFromChroma(chromaAvg);
   } catch (e) {
-    console.log('No se pudo analizar la tonalidad:', e.message);
     return null;
   }
 }
@@ -231,25 +198,17 @@ function computeWaveformPeaks(channelData, numPeaks) {
     const end = Math.min(start + blockSize, channelData.length);
     let sum = 0;
     for (let j = start; j < end; j++) sum += Math.abs(channelData[j]);
-    const avg = end > start ? sum / (end - start) : 0;
-    peaks.push(avg);
+    peaks.push(end > start ? sum / (end - start) : 0);
   }
   const max = Math.max.apply(null, peaks.concat([0.0001]));
   return peaks.map(function(p) { return Math.round((p / max) * 100) / 100; });
 }
 function convertToWav(inputPath, outputPath) {
   return new Promise(function(resolve, reject) {
-    ffmpeg(inputPath)
-      .noVideo()
-      .audioChannels(1)
-      .audioFrequency(44100)
-      .format('wav')
-      .on('end', function() { resolve(); })
-      .on('error', function(err) { reject(err); })
-      .save(outputPath);
+    ffmpeg(inputPath).noVideo().audioChannels(1).audioFrequency(44100).format('wav')
+      .on('end', resolve).on('error', reject).save(outputPath);
   });
 }
-
 function detectType(originalName, durationSeconds) {
   const name = originalName.toLowerCase();
   if (durationSeconds && durationSeconds > 40) return 'cancion';
@@ -264,142 +223,143 @@ function detectType(originalName, durationSeconds) {
   return 'otros';
 }
 
+// ---- Samples ----
+
 app.post('/upload', upload.single('sample'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No se recibió ningún archivo' });
 
-  const metadata = loadMetadata(effectiveId(req));
   let bpm = null, key = null, duration = null, waveform = [];
+  const isWav = req.file.originalname.toLowerCase().endsWith('.wav');
 
-  if (req.file.originalname.toLowerCase().endsWith('.wav')) {
+  if (isWav) {
     try {
-      const buffer = fs.readFileSync(req.file.path);
-      const decoded = wav.decode(buffer);
+      const decoded = wav.decode(req.file.buffer);
       const channelData = decoded.channelData[0];
       duration = channelData.length / decoded.sampleRate;
       waveform = computeWaveformPeaks(channelData, 24);
-
-      // Las canciones completas tardan mucho más en analizar BPM/tonalidad
-      // (y el servidor gratuito tiene pocos recursos), así que nos lo saltamos
-      // para esos casos y solo lo hacemos con samples cortos.
-      if (duration <= 45) {
-        bpm = analyzeBPM(channelData);
-        key = analyzeKey(channelData, decoded.sampleRate);
-      }
+      bpm = analyzeBPM(channelData);
+      key = analyzeKey(channelData, decoded.sampleRate);
     } catch (e) {
-      console.log('Error analizando el audio:', e.message);
+      console.log('Error analizando wav:', e.message);
     }
   } else {
-    // Otros formatos (mp3, ogg...): los convertimos a wav por detrás con ffmpeg
-    // para poder reutilizar el mismo análisis de BPM/tonalidad/forma de onda.
-    const tempWavPath = req.file.path + '.temp.wav';
+    const tempIn = path.join(os.tmpdir(), crypto.randomBytes(6).toString('hex') + '-' + req.file.originalname);
+    const tempWav = tempIn + '.wav';
     try {
-      await convertToWav(req.file.path, tempWavPath);
-      const buffer = fs.readFileSync(tempWavPath);
-      const decoded = wav.decode(buffer);
+      fs.writeFileSync(tempIn, req.file.buffer);
+      await convertToWav(tempIn, tempWav);
+      const decoded = wav.decode(fs.readFileSync(tempWav));
       const channelData = decoded.channelData[0];
       duration = channelData.length / decoded.sampleRate;
       waveform = computeWaveformPeaks(channelData, 24);
-
-      if (duration <= 45) {
-        bpm = analyzeBPM(channelData);
-        key = analyzeKey(channelData, decoded.sampleRate);
-      }
+      bpm = analyzeBPM(channelData);
+      key = analyzeKey(channelData, decoded.sampleRate);
     } catch (e) {
-      console.log('No se pudo convertir/analizar el archivo (¿ffmpeg instalado?):', e.message);
-      // Si falla la conversión, al menos intentamos sacar la duración
+      console.log('No se pudo convertir/analizar:', e.message);
       try {
-        const info = await mm.parseFile(req.file.path);
+        const info = await mm.parseBuffer(req.file.buffer, req.file.mimetype);
         duration = info.format.duration || null;
-      } catch (e2) {
-        console.log('Tampoco se pudo leer la duración:', e2.message);
-      }
+      } catch (e2) {}
     } finally {
-      if (fs.existsSync(tempWavPath)) fs.unlinkSync(tempWavPath);
+      if (fs.existsSync(tempIn)) fs.unlinkSync(tempIn);
+      if (fs.existsSync(tempWav)) fs.unlinkSync(tempWav);
     }
   }
 
   const type = detectType(req.file.originalname, duration);
+  const ownerId = effectiveId(req);
+  const sampleId = crypto.randomBytes(8).toString('hex');
+  const storagePath = ownerId + '/' + sampleId + '-' + req.file.originalname;
 
-  metadata[req.file.filename] = {
-    bpm: bpm, key: key, duration: duration, type: type, waveform: waveform,
-    favorite: false, customName: null, tags: []
-  };
-  saveMetadata(effectiveId(req), metadata);
-
-  res.json({ success: true, filename: req.file.filename });
-});
-
-app.get('/samples', (req, res) => {
-  const dir = userDir(effectiveId(req));
-  fs.readdir(dir, (err, files) => {
-    if (err) return res.json({ files: [] });
-
-    const metadata = loadMetadata(effectiveId(req));
-    const audioFiles = files.filter(f => f !== 'metadata.json');
-
-    const result = audioFiles.map(function(f) {
-      const m = metadata[f] || {};
-      return {
-        filename: f,
-        bpm: m.bpm || null,
-        key: m.key || null,
-        type: m.type || 'otros',
-        waveform: m.waveform || [],
-        favorite: m.favorite || false,
-        customName: m.customName || null,
-        tags: m.tags || [],
-        duration: m.duration || null
-      };
-    });
-
-    res.json({ files: result });
+  const { error: uploadError } = await supabase.storage.from(BUCKET).upload(storagePath, req.file.buffer, {
+    contentType: req.file.mimetype
   });
-});
+  if (uploadError) {
+    console.log('Error subiendo a Storage:', uploadError.message);
+    return res.status(500).json({ error: 'No se pudo guardar el archivo' });
+  }
 
-app.get('/uploads/:filename', (req, res) => {
-  const filePath = path.join(userDir(effectiveId(req)), req.params.filename);
-  res.sendFile(filePath, function(err) {
-    if (err) res.status(404).send('Archivo no encontrado');
+  const { error: dbError } = await supabase.from('samples').insert({
+    id: sampleId,
+    owner_id: ownerId,
+    storage_path: storagePath,
+    original_name: req.file.originalname,
+    bpm: bpm, key: key, duration: duration, type: type,
+    waveform: waveform, favorite: false, custom_name: null, tags: []
   });
+  if (dbError) {
+    console.log('Error guardando en la base de datos:', dbError.message);
+    return res.status(500).json({ error: 'No se pudo guardar la información del archivo' });
+  }
+
+  res.json({ success: true });
 });
 
-app.delete('/samples/:filename', (req, res) => {
-  const filePath = path.join(userDir(effectiveId(req)), req.params.filename);
-  fs.unlink(filePath, (err) => {
-    if (err) return res.status(500).json({ error: 'No se pudo borrar el archivo' });
-    const metadata = loadMetadata(effectiveId(req));
-    delete metadata[req.params.filename];
-    saveMetadata(effectiveId(req), metadata);
-    res.json({ success: true });
+app.get('/samples', async (req, res) => {
+  const { data, error } = await supabase
+    .from('samples')
+    .select('*')
+    .eq('owner_id', effectiveId(req))
+    .order('created_at', { ascending: true });
+
+  if (error) return res.json({ files: [] });
+
+  const files = data.map(function(row) {
+    const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(row.storage_path);
+    return {
+      id: row.id,
+      url: urlData.publicUrl,
+      originalName: row.original_name,
+      bpm: row.bpm,
+      key: row.key,
+      type: row.type,
+      waveform: row.waveform || [],
+      favorite: row.favorite,
+      customName: row.custom_name,
+      tags: row.tags || [],
+      duration: row.duration
+    };
   });
+
+  res.json({ files: files });
 });
 
-app.post('/samples/:filename/favorite', (req, res) => {
-  const metadata = loadMetadata(effectiveId(req));
-  if (!metadata[req.params.filename]) return res.status(404).json({ error: 'No encontrado' });
-  metadata[req.params.filename].favorite = !metadata[req.params.filename].favorite;
-  saveMetadata(effectiveId(req), metadata);
-  res.json({ success: true, favorite: metadata[req.params.filename].favorite });
+app.delete('/samples/:id', async (req, res) => {
+  const ownerId = effectiveId(req);
+  const { data: row } = await supabase.from('samples').select('storage_path').eq('id', req.params.id).eq('owner_id', ownerId).maybeSingle();
+  if (!row) return res.status(404).json({ error: 'No encontrado' });
+
+  await supabase.storage.from(BUCKET).remove([row.storage_path]);
+  await supabase.from('samples').delete().eq('id', req.params.id).eq('owner_id', ownerId);
+  res.json({ success: true });
 });
 
-app.patch('/samples/:filename/name', (req, res) => {
+app.post('/samples/:id/favorite', async (req, res) => {
+  const ownerId = effectiveId(req);
+  const { data: row } = await supabase.from('samples').select('favorite').eq('id', req.params.id).eq('owner_id', ownerId).maybeSingle();
+  if (!row) return res.status(404).json({ error: 'No encontrado' });
+
+  const newValue = !row.favorite;
+  await supabase.from('samples').update({ favorite: newValue }).eq('id', req.params.id).eq('owner_id', ownerId);
+  res.json({ success: true, favorite: newValue });
+});
+
+app.patch('/samples/:id/name', async (req, res) => {
   const name = req.body && req.body.name;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Nombre vacío' });
-  const metadata = loadMetadata(effectiveId(req));
-  if (!metadata[req.params.filename]) return res.status(404).json({ error: 'No encontrado' });
-  metadata[req.params.filename].customName = name.trim();
-  saveMetadata(effectiveId(req), metadata);
-  res.json({ success: true, customName: metadata[req.params.filename].customName });
+
+  const ownerId = effectiveId(req);
+  await supabase.from('samples').update({ custom_name: name.trim() }).eq('id', req.params.id).eq('owner_id', ownerId);
+  res.json({ success: true, customName: name.trim() });
 });
 
-app.patch('/samples/:filename/tags', (req, res) => {
+app.patch('/samples/:id/tags', async (req, res) => {
   const tags = req.body && req.body.tags;
   if (!Array.isArray(tags)) return res.status(400).json({ error: 'tags debe ser un array' });
-  const metadata = loadMetadata(effectiveId(req));
-  if (!metadata[req.params.filename]) return res.status(404).json({ error: 'No encontrado' });
-  metadata[req.params.filename].tags = tags;
-  saveMetadata(effectiveId(req), metadata);
-  res.json({ success: true, tags: metadata[req.params.filename].tags });
+
+  const ownerId = effectiveId(req);
+  await supabase.from('samples').update({ tags: tags }).eq('id', req.params.id).eq('owner_id', ownerId);
+  res.json({ success: true, tags: tags });
 });
 
 app.listen(PORT, '0.0.0.0', () => {

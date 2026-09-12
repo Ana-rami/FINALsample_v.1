@@ -625,7 +625,7 @@
       const bpmTerm = rawTerm.replace(/bpm/g, '').trim();
       const filtered = rawTerm
         ? allFiles.filter(function(f) {
-            const name = (f.customName || f.filename).toLowerCase();
+            const name = (f.customName || f.originalName || '').toLowerCase();
             const nameMatch = name.includes(rawTerm);
             const bpmMatch = f.bpm && (String(f.bpm).includes(rawTerm) || (bpmTerm && String(f.bpm).includes(bpmTerm)));
             return nameMatch || bpmMatch;
@@ -658,7 +658,7 @@
   }
 
   function buildRowHTML(file) {
-    const displayName = file.customName || (file.filename.split('-').slice(1).join('-') || file.filename);
+    const displayName = file.customName || file.originalName || 'sample';
     const bpmTag = file.bpm
       ? '<div class="meta bpm-col"><strong>' + file.bpm + '</strong> bpm</div>'
       : '<div class="meta bpm-col">—</div>';
@@ -669,29 +669,29 @@
 
     const tagsHTML = (file.tags || []).map(function(t) {
       return '<span class="tag manual">' + t +
-        ' <span class="tag-remove" onclick="removeTag(event, \'' + file.filename + '\', \'' + t + '\')">×</span></span>';
+        ' <span class="tag-remove" onclick="removeTag(event, \'' + file.id + '\', \'' + t + '\')">×</span></span>';
     }).join('');
 
     return (
-      '<div class="sample-row" draggable="true" ondragstart="handleDragStart(event, \'' + file.filename + '\', \'' + displayName.replace(/'/g, "") + '\')">' +
-        '<button class="play-btn" data-filename="' + file.filename + '" onclick="event.stopPropagation(); toggleSample(\'' + file.filename + '\')">' +
+      '<div class="sample-row" draggable="true" ondragstart="handleDragStart(event, \'' + file.url + '\', \'' + displayName.replace(/'/g, "") + '\')">' +
+        '<button class="play-btn" data-id="' + file.id + '" onclick="event.stopPropagation(); toggleSample(\'' + file.id + '\', \'' + file.url + '\')">' +
           PLAY_ICON +
         '</button>' +
         '<div class="sample-info">' +
           '<div class="sample-name-row">' +
             '<span class="sample-name">' + displayName + '</span>' +
-            '<button class="icon-btn" onclick="event.stopPropagation(); startRename(\'' + file.filename + '\')" title="Renombrar">✎</button>' +
+            '<button class="icon-btn" onclick="event.stopPropagation(); startRename(\'' + file.id + '\')" title="Renombrar">✎</button>' +
           '</div>' +
           '<div class="sample-tags">' + tagsHTML +
-            '<button class="tag-add" onclick="event.stopPropagation(); addTag(\'' + file.filename + '\')">+ tag</button>' +
+            '<button class="tag-add" onclick="event.stopPropagation(); addTag(\'' + file.id + '\')">+ tag</button>' +
           '</div>' +
         '</div>' +
         buildWaveformHTML(file) +
         bpmTag +
         keyTag +
         durationTag +
-        '<button class="star-btn ' + (file.favorite ? 'active' : '') + '" onclick="event.stopPropagation(); toggleFavorite(\'' + file.filename + '\')" title="Favorito">' + (file.favorite ? '★' : '☆') + '</button>' +
-        '<button class="delete-btn" onclick="event.stopPropagation(); deleteSample(\'' + file.filename + '\')" title="Borrar">✕</button>' +
+        '<button class="star-btn ' + (file.favorite ? 'active' : '') + '" onclick="event.stopPropagation(); toggleFavorite(\'' + file.id + '\')" title="Favorito">' + (file.favorite ? '★' : '☆') + '</button>' +
+        '<button class="delete-btn" onclick="event.stopPropagation(); deleteSample(\'' + file.id + '\')" title="Borrar">✕</button>' +
       '</div>'
     );
   }
@@ -816,11 +816,11 @@
     document.querySelectorAll('.play-btn').forEach(function(btn) { btn.innerHTML = PLAY_ICON; });
   }
 
-  function toggleSample(filename) {
+  function toggleSample(id, url) {
     const player = document.getElementById('player');
-    const btns = document.querySelectorAll('.play-btn[data-filename="' + filename + '"]');
+    const btns = document.querySelectorAll('.play-btn[data-id="' + id + '"]');
 
-    if (currentlyPlaying === filename && !player.paused) {
+    if (currentlyPlaying === id && !player.paused) {
       player.pause();
       btns.forEach(function(b) { b.innerHTML = PLAY_ICON; });
       currentlyPlaying = null;
@@ -828,10 +828,10 @@
     }
 
     resetAllButtons();
-    player.src = '/uploads/' + filename;
+    player.src = url;
     player.play();
     btns.forEach(function(b) { b.innerHTML = PAUSE_ICON; });
-    currentlyPlaying = filename;
+    currentlyPlaying = id;
   }
 
   document.getElementById('player').addEventListener('ended', function() {
@@ -847,18 +847,17 @@
     return 'application/octet-stream';
   }
 
-  function handleDragStart(e, filename, displayName) {
-    const url = window.location.origin + '/uploads/' + filename;
-    const mime = getMimeType(filename);
+  function handleDragStart(e, url, displayName) {
+    const mime = getMimeType(url);
     e.dataTransfer.effectAllowed = 'copy';
     e.dataTransfer.setData('DownloadURL', mime + ':' + displayName + ':' + url);
   }
 
-  async function deleteSample(filename) {
+  async function deleteSample(id) {
     const confirmDelete = confirm('¿Seguro que quieres borrar este sample? No se puede deshacer.');
     if (!confirmDelete) return;
 
-    const res = await fetch('/samples/' + encodeURIComponent(filename), { method: 'DELETE' });
+    const res = await fetch('/samples/' + encodeURIComponent(id), { method: 'DELETE' });
     const data = await res.json();
 
     if (data.success) {
@@ -868,24 +867,24 @@
     }
   }
 
-  async function toggleFavorite(filename) {
-    const res = await fetch('/samples/' + encodeURIComponent(filename) + '/favorite', { method: 'POST' });
+  async function toggleFavorite(id) {
+    const res = await fetch('/samples/' + encodeURIComponent(id) + '/favorite', { method: 'POST' });
     const data = await res.json();
     if (data.success) loadSamples();
   }
 
-  function startRename(filename) {
-    const file = allFiles.find(function(f) { return f.filename === filename; });
-    const current = file ? (file.customName || file.filename.split('-').slice(1).join('-')) : '';
+  function startRename(id) {
+    const file = allFiles.find(function(f) { return f.id === id; });
+    const current = file ? (file.customName || file.originalName) : '';
     const input = window.prompt('Nuevo nombre para este sample:', current);
     if (input === null) return;
     const clean = sanitize(input);
     if (!clean) return;
-    renameSample(filename, clean);
+    renameSample(id, clean);
   }
 
-  async function renameSample(filename, newName) {
-    const res = await fetch('/samples/' + encodeURIComponent(filename) + '/name', {
+  async function renameSample(id, newName) {
+    const res = await fetch('/samples/' + encodeURIComponent(id) + '/name', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: newName })
@@ -898,27 +897,27 @@
     }
   }
 
-  function addTag(filename) {
+  function addTag(id) {
     const input = window.prompt('Añadir etiqueta:');
     if (!input) return;
     const clean = sanitize(input);
     if (!clean) return;
-    const file = allFiles.find(function(f) { return f.filename === filename; });
+    const file = allFiles.find(function(f) { return f.id === id; });
     const tags = (file && file.tags) ? file.tags.slice() : [];
     if (tags.indexOf(clean) !== -1) return;
     tags.push(clean);
-    saveTags(filename, tags);
+    saveTags(id, tags);
   }
 
-  function removeTag(event, filename, tag) {
+  function removeTag(event, id, tag) {
     event.stopPropagation();
-    const file = allFiles.find(function(f) { return f.filename === filename; });
+    const file = allFiles.find(function(f) { return f.id === id; });
     const tags = (file && file.tags) ? file.tags.filter(function(t) { return t !== tag; }) : [];
-    saveTags(filename, tags);
+    saveTags(id, tags);
   }
 
-  async function saveTags(filename, tags) {
-    const res = await fetch('/samples/' + encodeURIComponent(filename) + '/tags', {
+  async function saveTags(id, tags) {
+    const res = await fetch('/samples/' + encodeURIComponent(id) + '/tags', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tags: tags })
