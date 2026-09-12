@@ -132,10 +132,20 @@ const upload = multer({ storage: multer.memoryStorage() });
 function analyzeBPM(channelData) {
   try {
     const mt = new MusicTempo(channelData);
-    return Math.round(mt.tempo);
+    return normalizeBpm(Math.round(mt.tempo));
   } catch (e) {
     return null;
   }
+}
+
+// Corrige el error típico de "doblar/partir" el tempo detectado,
+// llevándolo al rango habitual de música (70-185 bpm aprox).
+function normalizeBpm(bpm) {
+  if (!bpm) return bpm;
+  let value = bpm;
+  while (value > 185) value = value / 2;
+  while (value < 70) value = value * 2;
+  return Math.round(value);
 }
 
 const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
@@ -171,20 +181,25 @@ function estimateKeyFromChroma(chroma) {
 function analyzeKey(channelData, sampleRate) {
   try {
     const bufferSize = 4096;
+    const hopSize = 2048; // solapamos los bloques para no perder información entre cortes
     Meyda.bufferSize = bufferSize;
     Meyda.sampleRate = sampleRate;
     const chromaSum = new Array(12).fill(0);
-    let frameCount = 0;
-    for (let i = 0; i + bufferSize <= channelData.length; i += bufferSize) {
+    let totalWeight = 0;
+    for (let i = 0; i + bufferSize <= channelData.length; i += hopSize) {
       const frame = channelData.slice(i, i + bufferSize);
       const chroma = Meyda.extract('chroma', frame);
       if (chroma) {
-        for (let j = 0; j < 12; j++) chromaSum[j] += chroma[j];
-        frameCount++;
+        // damos más peso a los trozos con más energía (silencios cuentan casi nada)
+        let energy = 0;
+        for (let k = 0; k < frame.length; k++) energy += frame[k] * frame[k];
+        const weight = Math.sqrt(energy / frame.length) + 0.0001;
+        for (let j = 0; j < 12; j++) chromaSum[j] += chroma[j] * weight;
+        totalWeight += weight;
       }
     }
-    if (frameCount === 0) return null;
-    const chromaAvg = chromaSum.map(v => v / frameCount);
+    if (totalWeight === 0) return null;
+    const chromaAvg = chromaSum.map(function(v) { return v / totalWeight; });
     return estimateKeyFromChroma(chromaAvg);
   } catch (e) {
     return null;
