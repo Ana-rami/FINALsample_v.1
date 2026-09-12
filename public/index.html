@@ -291,24 +291,25 @@
   .mini-player {
     position: fixed;
     left: 50%;
-    bottom: -120px;
+    bottom: -140px;
     transform: translateX(-50%);
     width: calc(100% - 40px);
-    max-width: 640px;
+    max-width: 680px;
     background: rgba(255, 253, 249, 0.6);
     backdrop-filter: blur(22px) saturate(180%);
     -webkit-backdrop-filter: blur(22px) saturate(180%);
     border: 1px solid rgba(255, 255, 255, 0.55);
     border-radius: 20px;
     box-shadow: 0 20px 50px -20px rgba(43, 38, 32, 0.35);
-    padding: 12px 18px;
+    padding: 14px 20px;
     display: flex;
-    align-items: center;
-    gap: 14px;
+    flex-direction: column;
+    gap: 10px;
     z-index: 40;
     transition: bottom 0.3s ease;
   }
   .mini-player.visible { bottom: 24px; }
+  .mini-player-top { display: flex; align-items: center; gap: 12px; }
   .mini-player .play-btn {
     flex-shrink: 0;
     width: 36px;
@@ -316,17 +317,17 @@
     background: rgba(47, 95, 116, 0.14);
   }
   .mini-player .play-btn svg { width: 12px; height: 12px; }
-  .mini-player-body { flex: 1; min-width: 0; }
   .mini-player-name {
-    font-size: 12.5px;
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
     font-weight: 500;
     color: var(--text);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    margin-bottom: 6px;
   }
-  .mini-player-seek-row { display: flex; align-items: center; gap: 8px; }
+  .mini-player-seek-row { display: flex; align-items: center; gap: 10px; }
   .mini-player-time {
     font-family: 'JetBrains Mono', monospace;
     font-size: 10.5px;
@@ -647,20 +648,20 @@
 <audio id="player" style="display:none;"></audio>
 
 <div id="mini-player" class="mini-player">
-  <button class="play-btn" id="mini-player-toggle-btn" onclick="toggleMiniPlayerPlayback()">
-    <span id="mini-player-toggle"></span>
-  </button>
-  <div class="mini-player-body">
+  <div class="mini-player-top">
+    <button class="play-btn" id="mini-player-toggle-btn" onclick="toggleMiniPlayerPlayback()">
+      <span id="mini-player-toggle"></span>
+    </button>
     <div class="mini-player-name" id="mini-player-name"></div>
-    <div class="mini-player-seek-row">
-      <span class="mini-player-time" id="mini-player-current">0:00</span>
-      <div class="mini-player-wave-wrap">
-        <div class="mini-player-waveform" id="mp-wave-bg"></div>
-        <div class="mini-player-waveform" id="mp-wave-fg" style="clip-path: inset(0 100% 0 0);"></div>
-        <input type="range" id="mini-player-seek" min="0" max="100" value="0" step="0.1" oninput="seekTo(event)">
-      </div>
-      <span class="mini-player-time" id="mini-player-duration">0:00</span>
+  </div>
+  <div class="mini-player-seek-row">
+    <span class="mini-player-time" id="mini-player-current">0:00</span>
+    <div class="mini-player-wave-wrap">
+      <div class="mini-player-waveform" id="mp-wave-bg"></div>
+      <div class="mini-player-waveform" id="mp-wave-fg" style="clip-path: inset(0 100% 0 0);"></div>
+      <input type="range" id="mini-player-seek" min="0" max="100" value="0" step="0.1" oninput="seekTo(event)">
     </div>
+    <span class="mini-player-time" id="mini-player-duration">0:00</span>
   </div>
 </div>
 
